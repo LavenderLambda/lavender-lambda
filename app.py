@@ -4,79 +4,100 @@ import yfinance as yf
 from datetime import datetime
 import sqlite3
 
-# --- 1. MOBILE PAGE CONFIG ---
-st.set_page_config(page_title="Lavender Lambda", page_icon="💜", layout="centered")
+# --- 1. CONFIG & UI ---
+st.set_page_config(page_title="Lavender Lambda Scanner", page_icon="💜", layout="wide")
 
-# Custom CSS for a Mobile Dashboard look
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; border-radius: 20px; height: 3em; font-weight: bold; }
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
-    div[data-testid="stMetricValue"] { color: #4B0082; }
-    button[kind="primary"] { background-color: #ff4b4b !important; color: white !important; border: None; }
+    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 10px; border-left: 5px solid #4B0082; }
+    .status-active { color: green; font-weight: bold; }
+    .status-inactive { color: red; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATABASE SETUP ---
-def init_db():
-    conn = sqlite3.connect('lavender.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS system_state (id INTEGER PRIMARY KEY, override BOOLEAN)''')
-    c.execute('INSERT OR IGNORE INTO system_state (id, override) VALUES (1, 0)')
+# --- 2. ASSET WATCHLIST ---
+WATCHLIST = {
+    "Crypto": ["BTC-AUD", "ETH-AUD", "SOL-AUD"],
+    "US Equity": ["SPY", "NVDA", "TSLA", "AAPL"],
+    "ASX (AU)": ["CBA.AX", "BHP.AX", "VAS.AX"],
+    "Commodities": ["GC=F", "SI=F"], # Gold, Silver
+    "FX & Macro": ["AUDUSD=X", "^TNX", "^VIX"] # FX, 10Y Yield, Volatility Index
+}
+
+# --- 3. DATABASE (State Management) ---
+def get_db():
+    conn = sqlite3.connect('lavender_v2.db', check_same_thread=False)
+    conn.execute('CREATE TABLE IF NOT EXISTS system_state (id INTEGER PRIMARY KEY, override BOOLEAN)')
+    conn.execute('INSERT OR IGNORE INTO system_state (id, override) VALUES (1, 0)')
     conn.commit()
     return conn
 
-conn = init_db()
+db = get_db()
 
-# --- 3. LOGIC ---
-def get_status():
-    res = conn.execute('SELECT override FROM system_state WHERE id=1').fetchone()
-    return "INACTIVE" if res[0] else "ACTIVE"
+def is_override():
+    return db.execute('SELECT override FROM system_state WHERE id=1').fetchone()[0]
 
-def toggle_override():
-    current = conn.execute('SELECT override FROM system_state WHERE id=1').fetchone()[0]
-    conn.execute('UPDATE system_state SET override = ? WHERE id=1', (0 if current else 1,))
-    conn.commit()
+# --- 4. SCANNER ENGINE ---
+@st.cache_data(ttl=300) # Cache data for 5 mins to save battery/data
+def scan_markets(assets):
+    results = []
+    tickers = [item for sublist in assets.values() for item in sublist]
+    data = yf.download(tickers, period="2d", interval="1d", group_by='ticker', progress=False)
+    
+    for sector, items in assets.items():
+        for ticker in items:
+            try:
+                # Handle single vs multi-index dataframes from yfinance
+                target = data[ticker] if len(tickers) > 1 else data
+                close = target['Close'].iloc[-1]
+                prev_close = target['Close'].iloc[-2]
+                change = ((close - prev_close) / prev_close) * 100
+                results.append({"Sector": sector, "Asset": ticker, "Price": close, "Delta %": round(change, 2)})
+            except:
+                continue
+    return pd.DataFrame(results)
 
-# --- 4. UI ---
-st.title("💜 Lavender Lambda v1.0")
-status = get_status()
+# --- 5. MOBILE UI ---
+st.title("💜 Lavender Lambda Scanner")
 
-if status == "ACTIVE":
-    if st.button("🚨 GLOBAL OVERRIDE (SHUT DOWN)", type="primary"):
-        toggle_override()
+# Header & Override
+state = "INACTIVE" if is_override() else "ACTIVE"
+col_h1, col_h2 = st.columns([2, 1])
+with col_h1:
+    st.write(f"System Status: <span class='status-{state.lower()}'>{state}</span>", unsafe_allow_html=True)
+with col_h2:
+    if st.button("🔄 Refresh Scan"):
+        st.cache_data.clear()
         st.rerun()
+
+# Global Override Toggle
+if st.toggle("🚨 ACTIVATE GLOBAL OVERRIDE", value=is_override()):
+    db.execute('UPDATE system_state SET override = 1 WHERE id=1')
+    db.commit()
 else:
-    if st.button("✅ RE-ACTIVATE SYSTEM"):
-        toggle_override()
-        st.rerun()
-
-st.subheader("Intelligence Dashboard (AUD)")
-col1, col2 = st.columns(2)
-
-# Fetch Real-time Data
-try:
-    data = yf.download("BTC-AUD", period="2d", interval="1d")
-    price = data['Close'].iloc[-1]
-    prev_price = data['Close'].iloc[-2]
-    delta = ((price - prev_price) / prev_price) * 100
-except:
-    price, delta = 0, 0
-
-with col1:
-    st.metric("BTC Price", f"${price:,.0f} AUD", f"{delta:.2f}%")
-with col2:
-    st.metric("System Status", status)
+    db.execute('UPDATE system_state SET override = 0 WHERE id=1')
+    db.commit()
 
 st.divider()
-if abs(delta) < 2:
-    st.info("**AI Recommendation:** HOLD / NO ACTION")
-else:
-    st.success("**AI Recommendation:** Market movement detected. Analyzing...")
 
-tab1, tab2 = st.tabs(["Knowledge", "Portfolio"])
-with tab1:
-    st.write("Historical Patterns Detected:")
-    st.write("- 2024-07-15: Bullish Surge (+5.4%)")
-with tab2:
-    st.write("Balance: **$100,000.00 AUD**")
+# The Scanner Table
+df_scan = scan_markets(WATCHLIST)
+
+# 6. INTELLIGENCE HIGHLIGHTS
+st.subheader("🔥 Intelligence Alerts (>3% Move)")
+alerts = df_scan[abs(df_scan['Delta %']) > 3]
+if not alerts.empty:
+    for _, alert in alerts.iterrows():
+        st.warning(f"**{alert['Asset']}** ({alert['Sector']}) moved **{alert['Delta %']}%**. Analyzing impact...")
+else:
+    st.success("Markets stable. No major anomalies detected in the Circle of Competence.")
+
+# 7. SECTOR TABS
+tabs = st.tabs(list(WATCHLIST.keys()))
+for i, sector in enumerate(WATCHLIST.keys()):
+    with tabs[i]:
+        sector_df = df_scan[df_scan['Sector'] == sector]
+        st.dataframe(sector_df[["Asset", "Price", "Delta %"]], hide_index=True, use_container_width=True)
+
+st.divider()
+st.caption(f"Last Scan: {datetime.now().strftime('%H:%M:%S')} AUD/UTC")
