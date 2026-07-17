@@ -1,1 +1,3 @@
-{\rtf1}
+streamlit
+pandas
+yfinance
