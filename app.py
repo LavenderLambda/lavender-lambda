@@ -33,7 +33,6 @@ ALL_TICKERS = [t for sub in WATCHLIST.values() for t in sub]
 
 @st.cache_data(ttl=3600)
 def get_intel_data():
-    """Fetches 30 days of data so the Intelligence tab isn't empty."""
     try:
         data = yf.download(ALL_TICKERS, period="1mo", interval="1d", progress=False)['Close']
         return data
@@ -42,12 +41,21 @@ def get_intel_data():
 
 def get_context_news(ticker):
     try:
-        return yf.Ticker(ticker).news[:3]
+        # Fetch news and handle potential missing keys/label changes
+        news_list = yf.Ticker(ticker).news[:3]
+        processed_news = []
+        for n in news_list:
+            # Check for 'title' OR 'headline'
+            title = n.get('title') or n.get('headline') or "No Title Available"
+            # Check for 'link' OR 'url'
+            link = n.get('link') or n.get('url') or "#"
+            processed_news.append({"title": title, "link": link})
+        return processed_news
     except:
         return []
 
 # --- 5. UI LAYOUT ---
-st.title("💜 Lavender Lambda v1.5.2")
+st.title("💜 Lavender Lambda v1.5.3")
 
 # Status Sidebar
 with st.sidebar:
@@ -85,33 +93,31 @@ with tab_intel:
     st.subheader("Inter-market Analysis (Past 30 Days)")
     if intel_df is not None:
         corr_matrix = intel_df.pct_change().corr()
-        btc_corr = corr_matrix['BTC-AUD'].sort_values(ascending=False)
+        if 'BTC-AUD' in corr_matrix.columns:
+            btc_corr = corr_matrix['BTC-AUD'].sort_values(ascending=False)
+            if len(btc_corr) > 1:
+                partner = btc_corr.index[1]
+                strength = btc_corr.iloc[1]
+                st.success(f"**BTC-AUD** is currently tracking **{partner}** (Correlation: {strength:.2f})")
         
-        # Display the 'Best Friend'
-        partner = btc_corr.index[1]
-        strength = btc_corr.iloc[1]
-        
-        st.success(f"**BTC-AUD** is currently tracking **{partner}** (Correlation: {strength:.2f})")
-        
-        # News Context
+        # News Context - Updated to be more resilient
         st.divider()
         asset = st.selectbox("Get News Context for:", ALL_TICKERS)
-        for n in get_context_news(asset):
-            st.write(f"🔗 **[{n['title']}]({n['link']})**")
+        news_feed = get_context_news(asset)
+        if news_feed:
+            for n in news_feed:
+                st.write(f"🔗 **[{n['title']}]({n['link']})**")
+        else:
+            st.write("No news found for this asset.")
     else:
         st.warning("Insufficient data to calculate relationships.")
 
 with tab_perf:
     st.subheader("System Learning Curve")
-    st.write("This chart tracks the gap between the AI's predictions and reality.")
-    
-    # We fetch the logs from the DB
     logs = pd.read_sql("SELECT * FROM performance_logs", db)
-    
     if len(logs) < 2:
-        st.info("📊 **Observation Phase:** The system needs 48 hours of uptime to generate the first 'Error Grade'. Check back tomorrow!")
-        # Placeholder so the page isn't blank
-        dummy_data = pd.DataFrame({'Day': ['Starting...'], 'Error %': [20]})
+        st.info("📊 **Observation Phase:** Grading starting soon. Check back tomorrow!")
+        dummy_data = pd.DataFrame({'Day': ['Day 1'], 'Error %': [20]})
         st.line_chart(dummy_data, x='Day', y='Error %')
     else:
         st.line_chart(logs, x='date', y='error_rate')
