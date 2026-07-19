@@ -55,7 +55,6 @@ st.title("💜 Lavender Lambda")
 
 with st.sidebar:
     st.header("Governance")
-    st.caption("Immutable rules defined in the Constitution.")
     res = supabase.table("system_state").select("override").eq("id", 1).execute()
     ov = res.data[0]["override"] if res.data else False
     if st.toggle("🚨 GLOBAL OVERRIDE", value=ov):
@@ -72,11 +71,10 @@ hist_df = get_clean_data()
 if hist_df is not None:
     auto_log_performance(hist_df)
     
-    # DASHBOARD TABS
     tab1, tab2, tab3 = st.tabs(["📡 Scanner", "🧠 Intelligence", "📈 Performance"])
 
     with tab1:
-        st.markdown('<p class="description-text"><b>The "Observe" Phase:</b> This is your Circle of Competence. The AI monitors these assets for significant movements (Deltas) that require investigation.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="description-text"><b>The "Observe" Phase:</b> The AI monitors these assets for significant movements (Deltas) that require investigation.</p>', unsafe_allow_html=True)
         for sector, tickers in WATCHLIST.items():
             st.subheader(sector)
             cols = st.columns(len(tickers))
@@ -86,7 +84,7 @@ if hist_df is not None:
                         price = hist_df[t].iloc[-1]
                         prev = hist_df[t].iloc[-2]
                         delta = ((price - prev) / prev) * 100
-                        label = t.replace("-AUD", "").replace("=F", "")
+                        label = t.replace("-AUD", "").replace("=F", "").replace(".AX", "")
                         if pd.isna(delta) or delta == 0:
                             st.metric(label, f"${price:,.2f}", "Closed")
                         else:
@@ -95,8 +93,7 @@ if hist_df is not None:
                         st.caption(f"{t} offline")
 
     with tab2:
-        st.markdown('<p class="description-text"><b>The "Reasoning" Phase:</b> The AI looks for relationships between assets (Correlations) and matches current behavior against historical lessons saved in your Cloud Brain.</p>', unsafe_allow_html=True)
-        
+        st.markdown('<p class="description-text"><b>The "Reasoning" Phase:</b> The AI identifies relationships between assets and matches behavior against historical lessons.</p>', unsafe_allow_html=True)
         st.subheader("Inter-market Analysis")
         corr = hist_df.pct_change().corr()
         if 'BTC-AUD' in corr.columns:
@@ -105,7 +102,6 @@ if hist_df is not None:
         
         st.divider()
         st.subheader("Knowledge Ledger")
-        st.caption("Permanent archive of market anomalies identified by the system.")
         logs = supabase.table("knowledge_ledger").select("*").order("created_at", desc=True).limit(5).execute()
         if logs.data:
             st.table(pd.DataFrame(logs.data)[["asset", "context"]])
@@ -113,19 +109,28 @@ if hist_df is not None:
             st.write("Awaiting first major market anomaly...")
 
     with tab3:
-        st.markdown('<p class="description-text"><b>The "Learning" Phase:</b> The AI tracks its own prediction error. A downward-sloping line indicates the system is successfully self-correcting and earning its autonomy.</p>', unsafe_allow_html=True)
-        
+        st.markdown('<p class="description-text"><b>The "Learning" Phase:</b> This tracks the AI’s prediction error. A downward-sloping line indicates the system is getting smarter.</p>', unsafe_allow_html=True)
         st.subheader("System Learning Curve")
         perf_data = supabase.table("performance_logs").select("*").order("date").execute()
         if perf_data.data:
             chart_df = pd.DataFrame(perf_data.data)
-            fig = px.line(chart_df, x='date', y='error_rate', title="Daily Prediction Error (Target: 0%)")
+            # Ensure date is a datetime object for clean formatting
+            chart_df['date'] = pd.to_datetime(chart_df['date'])
+            
+            fig = px.line(chart_df, x='date', y='error_rate', title="Daily Prediction Error")
+            # Force the X-axis to show DD/MM/YY
+            fig.update_xaxes(
+                tickformat="%d/%m/%y",
+                dtick="D1", # Ensures a tick for every day
+                title_text="Date"
+            )
+            fig.update_yaxes(title_text="Error %")
             fig.update_traces(line_color='#702963', mode='lines+markers')
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("The graph will appear as soon as the first 24h cycle is logged.")
+            st.info("Performance data logging in progress...")
 
 else:
-    st.warning("Connecting to global markets... please refresh in a moment.")
+    st.warning("Connecting to global markets...")
 
-st.caption(f"Sync: {datetime.now().strftime('%H:%M')} AEST | Cloud Connected | v1.6.3")
+st.caption(f"Sync: {datetime.now().strftime('%H:%M')} AEST | Cloud Connected | v1.6.4")
