@@ -1,26 +1,23 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import numpy as np
-from datetime import datetime, timedelta
-import sqlite3
+from datetime import datetime
+from supabase import create_client, Client
 import plotly.express as px
 
-# --- 1. CONFIG ---
-st.set_page_config(page_title="Lavender Lambda Intelligence", page_icon="💜", layout="wide")
+# --- 1. CONFIG & CLOUD CONNECTION ---
+st.set_page_config(page_title="Lavender Lambda Cloud", page_icon="💜", layout="wide")
 
-# --- 2. DATABASE ---
-def init_db():
-    conn = sqlite3.connect('lavender_v4.db', check_same_thread=False)
-    conn.execute('''CREATE TABLE IF NOT EXISTS system_state (id INTEGER PRIMARY KEY, override BOOLEAN)''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS performance_logs (date TEXT PRIMARY KEY, error_rate REAL)''')
-    conn.execute('INSERT OR IGNORE INTO system_state (id, override) VALUES (1, 0)')
-    conn.commit()
-    return conn
+# Connect to Supabase using your Secrets
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-db = init_db()
+supabase = init_supabase()
 
-# --- 3. WATCHLIST ---
+# --- 2. WATCHLIST ---
 WATCHLIST = {
     "Crypto": ["BTC-AUD", "ETH-AUD"],
     "Equities": ["SPY", "VAS.AX", "NVDA"],
@@ -29,97 +26,81 @@ WATCHLIST = {
 }
 ALL_TICKERS = [t for sub in WATCHLIST.values() for t in sub]
 
-# --- 4. INTELLIGENCE FUNCTIONS ---
+# --- 3. CLOUD DATABASE LOGIC ---
+def get_override():
+    res = supabase.table("system_state").select("override").eq("id", 1).execute()
+    return res.data[0]["override"] if res.data else False
 
+def set_override(val):
+    supabase.table("system_state").update({"override": val}).eq("id", 1).execute()
+
+def save_knowledge(asset, event, context):
+    supabase.table("knowledge_ledger").insert({
+        "asset": asset, "event": event, "context": context
+    }).execute()
+
+# --- 4. ENGINE ---
 @st.cache_data(ttl=3600)
-def get_intel_data():
-    try:
-        data = yf.download(ALL_TICKERS, period="1mo", interval="1d", progress=False)['Close']
-        return data
-    except:
-        return None
+def get_data():
+    return yf.download(ALL_TICKERS, period="1mo", interval="1d", progress=False)['Close']
 
-def get_context_news(ticker):
-    try:
-        # Fetch news and handle potential missing keys/label changes
-        news_list = yf.Ticker(ticker).news[:3]
-        processed_news = []
-        for n in news_list:
-            # Check for 'title' OR 'headline'
-            title = n.get('title') or n.get('headline') or "No Title Available"
-            # Check for 'link' OR 'url'
-            link = n.get('link') or n.get('url') or "#"
-            processed_news.append({"title": title, "link": link})
-        return processed_news
-    except:
-        return []
+# --- 5. MOBILE UI ---
+st.title("💜 Lavender Lambda v1.6.0")
 
-# --- 5. UI LAYOUT ---
-st.title("💜 Lavender Lambda v1.5.3")
-
-# Status Sidebar
+# Sidebar Override
 with st.sidebar:
     st.header("Constitution")
-    override_val = db.execute('SELECT override FROM system_state').fetchone()[0]
-    if st.toggle("🚨 GLOBAL OVERRIDE", value=bool(override_val)):
-        db.execute('UPDATE system_state SET override = 1')
-    else:
-        db.execute('UPDATE system_state SET override = 0')
-    db.commit()
-    st.info("Autonomy Mode: Watching & Learning")
+    current_ov = get_override()
+    new_ov = st.toggle("🚨 GLOBAL OVERRIDE", value=current_ov)
+    if new_ov != current_ov:
+        set_override(new_ov)
+        st.rerun()
+    st.info("Storage: Supabase Cloud Connected")
 
-# Data Engine
-intel_df = get_intel_data()
+hist_df = get_data()
 
 tab_scan, tab_intel, tab_perf = st.tabs(["📡 Scanner", "🧠 Intelligence", "📈 Performance"])
 
 with tab_scan:
-    if intel_df is not None:
+    if hist_df is not None:
         for sector, tickers in WATCHLIST.items():
             st.subheader(sector)
             cols = st.columns(len(tickers))
             for i, t in enumerate(tickers):
                 try:
-                    price = intel_df[t].iloc[-1]
-                    prev = intel_df[t].iloc[-2]
+                    price = hist_df[t].iloc[-1]
+                    prev = hist_df[t].iloc[-2]
                     delta = ((price - prev) / prev) * 100
                     cols[i].metric(t.replace("-AUD", ""), f"${price:,.2f}", f"{delta:.2f}%")
-                except:
-                    continue
-    else:
-        st.error("Market data link down. Check internet connection.")
+                    
+                    # AUTO-KNOWLEDGE: Save to Supabase if move > 5%
+                    if abs(delta) > 5.0:
+                        save_knowledge(t, "Volatility Spike", f"Move of {delta:.2f}% detected.")
+                except: continue
 
 with tab_intel:
-    st.subheader("Inter-market Analysis (Past 30 Days)")
-    if intel_df is not None:
-        corr_matrix = intel_df.pct_change().corr()
-        if 'BTC-AUD' in corr_matrix.columns:
-            btc_corr = corr_matrix['BTC-AUD'].sort_values(ascending=False)
-            if len(btc_corr) > 1:
-                partner = btc_corr.index[1]
-                strength = btc_corr.iloc[1]
-                st.success(f"**BTC-AUD** is currently tracking **{partner}** (Correlation: {strength:.2f})")
-        
-        # News Context - Updated to be more resilient
-        st.divider()
-        asset = st.selectbox("Get News Context for:", ALL_TICKERS)
-        news_feed = get_context_news(asset)
-        if news_feed:
-            for n in news_feed:
-                st.write(f"🔗 **[{n['title']}]({n['link']})**")
-        else:
-            st.write("No news found for this asset.")
+    st.subheader("Cloud Intelligence")
+    if hist_df is not None:
+        corr = hist_df.pct_change().corr()
+        btc_link = corr['BTC-AUD'].sort_values(ascending=False)
+        st.success(f"**BTC-AUD** is currently tracking **{btc_link.index[1]}** ({btc_link.iloc[1]:.2f})")
+    
+    st.divider()
+    st.subheader("Permanent Knowledge Ledger")
+    # Pulling from Supabase Cloud
+    knowledge_data = supabase.table("knowledge_ledger").select("*").order("created_at", desc=True).limit(5).execute()
+    if knowledge_data.data:
+        st.table(pd.DataFrame(knowledge_data.data)[["created_at", "asset", "event"]])
     else:
-        st.warning("Insufficient data to calculate relationships.")
+        st.write("Awaiting first major market anomaly...")
 
 with tab_perf:
-    st.subheader("System Learning Curve")
-    logs = pd.read_sql("SELECT * FROM performance_logs", db)
-    if len(logs) < 2:
-        st.info("📊 **Observation Phase:** Grading starting soon. Check back tomorrow!")
-        dummy_data = pd.DataFrame({'Day': ['Day 1'], 'Error %': [20]})
-        st.line_chart(dummy_data, x='Day', y='Error %')
+    st.subheader("Historical Learning")
+    # This will now grow day-by-day and NEVER be deleted
+    perf_data = supabase.table("performance_logs").select("*").execute()
+    if perf_data.data:
+        st.line_chart(pd.DataFrame(perf_data.data), x='date', y='error_rate')
     else:
-        st.line_chart(logs, x='date', y='error_rate')
+        st.info("Initial Observation Phase: Recording first data points in Supabase...")
 
-st.caption(f"Last Sync: {datetime.now().strftime('%H:%M:%S')} AUD")
+st.caption(f"Cloud Sync: {datetime.now().strftime('%H:%M:%S')} AUD")
