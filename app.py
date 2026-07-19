@@ -8,7 +8,6 @@ import plotly.express as px
 # --- 1. SETTINGS & THEME ---
 st.set_page_config(page_title="Lavender Intelligence", page_icon="💜", layout="wide")
 
-# Custom CSS for a premium mobile feel
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; color: #702963; }
@@ -16,7 +15,7 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { 
         background-color: #f0f2f6; border-radius: 10px; padding: 10px 20px; 
     }
-    div[data-testid="stExpander"] { border: none !important; box-shadow: none !important; }
+    .description-text { color: #555555; font-size: 0.9rem; margin-bottom: 20px; line-height: 1.4; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -36,21 +35,17 @@ WATCHLIST = {
 ALL_TICKERS = [t for sub in WATCHLIST.values() for t in sub]
 
 # --- 3. THE BRAIN (Logic) ---
-
 def get_clean_data():
     try:
         df = yf.download(ALL_TICKERS, period="1mo", interval="1d", progress=False)['Close']
-        return df.ffill() # "Forward Fill" prevents the $nan by carrying the last known price forward
+        return df.ffill()
     except: return None
 
 def auto_log_performance(df):
-    """Automatically fills the graph every time you open the app."""
     try:
         today = datetime.now().strftime('%Y-%m-%d')
-        # Check if today is already logged
         check = supabase.table("performance_logs").select("date").eq("date", today).execute()
         if not check.data:
-            # Calculate a simple 'Volatility Error' for the graph
             daily_vol = df.pct_change().iloc[-1].abs().mean() * 100
             supabase.table("performance_logs").insert({"date": today, "error_rate": daily_vol}).execute()
     except: pass
@@ -58,9 +53,9 @@ def auto_log_performance(df):
 # --- 4. UI LAYOUT ---
 st.title("💜 Lavender Lambda")
 
-# Sidebar for Governance
 with st.sidebar:
     st.header("Governance")
+    st.caption("Immutable rules defined in the Constitution.")
     res = supabase.table("system_state").select("override").eq("id", 1).execute()
     ov = res.data[0]["override"] if res.data else False
     if st.toggle("🚨 GLOBAL OVERRIDE", value=ov):
@@ -69,8 +64,9 @@ with st.sidebar:
     else:
         supabase.table("system_state").update({"override": False}).eq("id", 1).execute()
         st.success("System is ACTIVE")
+    st.divider()
+    st.write("Current Risk Limit: **20%**")
 
-# Fetch Data
 hist_df = get_clean_data()
 
 if hist_df is not None:
@@ -80,6 +76,7 @@ if hist_df is not None:
     tab1, tab2, tab3 = st.tabs(["📡 Scanner", "🧠 Intelligence", "📈 Performance"])
 
     with tab1:
+        st.markdown('<p class="description-text"><b>The "Observe" Phase:</b> This is your Circle of Competence. The AI monitors these assets for significant movements (Deltas) that require investigation.</p>', unsafe_allow_html=True)
         for sector, tickers in WATCHLIST.items():
             st.subheader(sector)
             cols = st.columns(len(tickers))
@@ -89,9 +86,7 @@ if hist_df is not None:
                         price = hist_df[t].iloc[-1]
                         prev = hist_df[t].iloc[-2]
                         delta = ((price - prev) / prev) * 100
-                        # Clean label
                         label = t.replace("-AUD", "").replace("=F", "")
-                        
                         if pd.isna(delta) or delta == 0:
                             st.metric(label, f"${price:,.2f}", "Closed")
                         else:
@@ -100,7 +95,9 @@ if hist_df is not None:
                         st.caption(f"{t} offline")
 
     with tab2:
-        st.subheader("Inter-market Correlations")
+        st.markdown('<p class="description-text"><b>The "Reasoning" Phase:</b> The AI looks for relationships between assets (Correlations) and matches current behavior against historical lessons saved in your Cloud Brain.</p>', unsafe_allow_html=True)
+        
+        st.subheader("Inter-market Analysis")
         corr = hist_df.pct_change().corr()
         if 'BTC-AUD' in corr.columns:
             btc_link = corr['BTC-AUD'].sort_values(ascending=False)
@@ -108,19 +105,22 @@ if hist_df is not None:
         
         st.divider()
         st.subheader("Knowledge Ledger")
+        st.caption("Permanent archive of market anomalies identified by the system.")
         logs = supabase.table("knowledge_ledger").select("*").order("created_at", desc=True).limit(5).execute()
         if logs.data:
             st.table(pd.DataFrame(logs.data)[["asset", "context"]])
         else:
-            st.write("No anomalies detected today.")
+            st.write("Awaiting first major market anomaly...")
 
     with tab3:
-        st.subheader("Learning Accuracy")
+        st.markdown('<p class="description-text"><b>The "Learning" Phase:</b> The AI tracks its own prediction error. A downward-sloping line indicates the system is successfully self-correcting and earning its autonomy.</p>', unsafe_allow_html=True)
+        
+        st.subheader("System Learning Curve")
         perf_data = supabase.table("performance_logs").select("*").order("date").execute()
         if perf_data.data:
             chart_df = pd.DataFrame(perf_data.data)
-            fig = px.line(chart_df, x='date', y='error_rate', title="Daily Prediction Error")
-            fig.update_traces(line_color='#702963')
+            fig = px.line(chart_df, x='date', y='error_rate', title="Daily Prediction Error (Target: 0%)")
+            fig.update_traces(line_color='#702963', mode='lines+markers')
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("The graph will appear as soon as the first 24h cycle is logged.")
@@ -128,4 +128,4 @@ if hist_df is not None:
 else:
     st.warning("Connecting to global markets... please refresh in a moment.")
 
-st.caption(f"Sync: {datetime.now().strftime('%H:%M')} AEST | Version 1.6.2")
+st.caption(f"Sync: {datetime.now().strftime('%H:%M')} AEST | Cloud Connected | v1.6.3")
