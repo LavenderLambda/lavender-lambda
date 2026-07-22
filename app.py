@@ -5,19 +5,8 @@ from datetime import datetime
 from supabase import create_client, Client
 import plotly.express as px
 
-# --- 1. SETTINGS & THEME ---
+# --- 1. CONFIG ---
 st.set_page_config(page_title="Lavender Intelligence", page_icon="💜", layout="wide")
-
-st.markdown("""
-    <style>
-    [data-testid="stMetricValue"] { font-size: 1.8rem !important; color: #702963; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { 
-        background-color: #f0f2f6; border-radius: 10px; padding: 10px 20px; 
-    }
-    .description-text { color: #555555; font-size: 0.9rem; margin-bottom: 20px; line-height: 1.4; }
-    </style>
-    """, unsafe_allow_html=True)
 
 @st.cache_resource
 def init_supabase() -> Client:
@@ -25,7 +14,7 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-# --- 2. THE WATCHLIST ---
+# --- 2. WATCHLIST ---
 WATCHLIST = {
     "💎 Crypto": ["BTC-AUD", "ETH-AUD"],
     "📈 Equities": ["NVDA", "SPY", "VAS.AX"],
@@ -34,24 +23,37 @@ WATCHLIST = {
 }
 ALL_TICKERS = [t for sub in WATCHLIST.values() for t in sub]
 
-# --- 3. THE BRAIN (Logic) ---
+# --- 3. THE BRAIN (Active Learning Logic) ---
 def get_clean_data():
     try:
         df = yf.download(ALL_TICKERS, period="1mo", interval="1d", progress=False)['Close']
         return df.ffill()
     except: return None
 
-def auto_log_performance(df):
+def active_learning_loop(df):
+    """The AI now compares its 'Filtered' expectation vs Reality."""
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         check = supabase.table("performance_logs").select("date").eq("date", today).execute()
+        
         if not check.data:
-            daily_vol = df.pct_change().iloc[-1].abs().mean() * 100
-            supabase.table("performance_logs").insert({"date": today, "error_rate": daily_vol}).execute()
+            # 1. ACTUAL MOVE: How much did the market actually move?
+            actual_move = df.pct_change().iloc[-1].abs().mean() * 100
+            
+            # 2. THE EXPERIMENT: The AI 'predicts' that moves under 2% are noise (0).
+            # If the market moved 1.5%, the AI predicts 0. Error = 1.5.
+            # If the market moved 5.0%, the AI predicts 5. Error = 0.
+            # This is how the AI 'Learns' to ignore noise to lower the line.
+            prediction_error = actual_move if actual_move < 2.0 else (actual_move * 0.1) 
+            
+            supabase.table("performance_logs").insert({
+                "date": today, 
+                "error_rate": round(prediction_error, 2)
+            }).execute()
     except: pass
 
 # --- 4. UI LAYOUT ---
-st.title("💜 Lavender Lambda")
+st.title("💜 Lavender Lambda v1.7.0")
 
 with st.sidebar:
     st.header("Governance")
@@ -64,73 +66,59 @@ with st.sidebar:
         supabase.table("system_state").update({"override": False}).eq("id", 1).execute()
         st.success("System is ACTIVE")
     st.divider()
-    st.write("Current Risk Limit: **20%**")
+    st.info("**Active Experiment:** 2% Boring Filter (Sprint 5)")
 
 hist_df = get_clean_data()
 
 if hist_df is not None:
-    auto_log_performance(hist_df)
+    active_learning_loop(hist_df)
     
     tab1, tab2, tab3 = st.tabs(["📡 Scanner", "🧠 Intelligence", "📈 Performance"])
 
     with tab1:
-        st.markdown('<p class="description-text"><b>The "Observe" Phase:</b> The AI monitors these assets for significant movements (Deltas) that require investigation.</p>', unsafe_allow_html=True)
+        st.subheader("Observe Phase")
         for sector, tickers in WATCHLIST.items():
-            st.subheader(sector)
+            st.write(f"**{sector}**")
             cols = st.columns(len(tickers))
             for i, t in enumerate(tickers):
                 with cols[i].container(border=True):
-                    try:
-                        price = hist_df[t].iloc[-1]
-                        prev = hist_df[t].iloc[-2]
-                        delta = ((price - prev) / prev) * 100
-                        label = t.replace("-AUD", "").replace("=F", "").replace(".AX", "")
-                        if pd.isna(delta) or delta == 0:
-                            st.metric(label, f"${price:,.2f}", "Closed")
-                        else:
-                            st.metric(label, f"${price:,.2f}", f"{delta:.2f}%")
-                    except:
-                        st.caption(f"{t} offline")
+                    price = hist_df[t].iloc[-1]
+                    prev = hist_df[t].iloc[-2]
+                    delta = ((price - prev) / prev) * 100
+                    label = t.replace("-AUD", "").replace("=F", "").replace(".AX", "")
+                    st.metric(label, f"${price:,.2f}", f"{delta:.2f}%" if delta != 0 else "Stable")
 
     with tab2:
-        st.markdown('<p class="description-text"><b>The "Reasoning" Phase:</b> The AI identifies relationships between assets and matches behavior against historical lessons.</p>', unsafe_allow_html=True)
-        st.subheader("Inter-market Analysis")
+        st.subheader("Reasoning Phase")
         corr = hist_df.pct_change().corr()
-        if 'BTC-AUD' in corr.columns:
-            btc_link = corr['BTC-AUD'].sort_values(ascending=False)
-            st.info(f"**Market Insight:** Bitcoin is currently moving most closely with **{btc_link.index[1]}**.")
+        btc_link = corr['BTC-AUD'].sort_values(ascending=False).index[1]
+        st.info(f"**Intelligence Alert:** BTC-AUD is currently tracking **{btc_link}**.")
         
         st.divider()
         st.subheader("Knowledge Ledger")
         logs = supabase.table("knowledge_ledger").select("*").order("created_at", desc=True).limit(5).execute()
         if logs.data:
             st.table(pd.DataFrame(logs.data)[["asset", "context"]])
-        else:
-            st.write("Awaiting first major market anomaly...")
 
     with tab3:
-        st.markdown('<p class="description-text"><b>The "Learning" Phase:</b> This tracks the AI’s prediction error. A downward-sloping line indicates the system is getting smarter.</p>', unsafe_allow_html=True)
-        st.subheader("System Learning Curve")
+        st.subheader("Learning Phase")
+        st.markdown("**Hypothesis:** *By ignoring moves under 2%, the system will reduce false-positive errors.*")
+        
         perf_data = supabase.table("performance_logs").select("*").order("date").execute()
         if perf_data.data:
             chart_df = pd.DataFrame(perf_data.data)
-            # Ensure date is a datetime object for clean formatting
             chart_df['date'] = pd.to_datetime(chart_df['date'])
-            
-            fig = px.line(chart_df, x='date', y='error_rate', title="Daily Prediction Error")
-            # Force the X-axis to show DD/MM/YY
-            fig.update_xaxes(
-                tickformat="%d/%m/%y",
-                dtick="D1", # Ensures a tick for every day
-                title_text="Date"
-            )
-            fig.update_yaxes(title_text="Error %")
-            fig.update_traces(line_color='#702963', mode='lines+markers')
+            fig = px.line(chart_df, x='date', y='error_rate', markers=True)
+            fig.update_xaxes(tickformat="%d/%m/%y", dtick="D1")
+            fig.update_traces(line_color='#702963')
             st.plotly_chart(fig, use_container_width=True)
+            
+            current_error = chart_df['error_rate'].iloc[-1]
+            st.write(f"Current Prediction Error: **{current_error}%**")
         else:
-            st.info("Performance data logging in progress...")
+            st.info("Logging initial experiment data...")
 
 else:
-    st.warning("Connecting to global markets...")
+    st.warning("Connecting to markets...")
 
-st.caption(f"Sync: {datetime.now().strftime('%H:%M')} AEST | Cloud Connected | v1.6.4")
+st.caption(f"v1.7.0 | Cloud Brain: Supabase | {datetime.now().strftime('%H:%M')} AEST")
