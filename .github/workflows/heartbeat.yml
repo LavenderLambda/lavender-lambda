@@ -2,6 +2,7 @@ name: Daily Lavender Heartbeat
 
 on:
   schedule:
+    # Runs at 10:00 AM Sydney time
     - cron: '0 0 * * *'
   workflow_dispatch: 
 
@@ -15,12 +16,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9' # Using a slightly older, super-stable Python
+          python-version: '3.11' # Upgraded to 3.11 for better library support
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pandas==1.5.3 yfinance==0.2.3 supabase postgrest==0.10.6
+          python -m pip install --upgrade pip
+          # FORCE NumPy 1.x to avoid the 'dtype size' crash
+          pip install "numpy<2.0.0" 
+          pip install pandas yfinance supabase postgrest==0.10.6
 
       - name: Run Heartbeat
         env:
