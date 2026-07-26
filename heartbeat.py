@@ -1,29 +1,53 @@
-name: Daily Lavender Heartbeat
+import pandas as pd
+import yfinance as yf
+from datetime import datetime
+import os
+import sys
+from supabase import create_client
 
-on:
-  schedule:
-    # Runs at 10:00 AM Sydney time
-    - cron: '0 0 * * *'
-  workflow_dispatch: 
+def run_sync():
+    print("--- STABLE ROBOT SHIFT STARTED ---")
+    try:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY")
+        
+        if not url or "supabase.co" not in url:
+            print("CRITICAL ERROR: SUPABASE_URL looks invalid.")
+            sys.exit(1)
 
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+        supabase = create_client(url, key)
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        # Assets
+        tickers = ["BTC-AUD", "ETH-AUD", "NVDA", "SPY", "VAS.AX", "GC=F", "SI=F", "AUDUSD=X", "^TNX"]
 
-      - name: Install dependencies
-        run: |
-          pip install pandas yfinance supabase websockets>=13.0
+        # Fetch Data (Using the stable method)
+        print("Downloading market data...")
+        data = yf.download(tickers, period="1mo", interval="1d", progress=False)
+        
+        # Pull only the 'Close' prices
+        df = data['Close'].ffill()
+        
+        if df.empty:
+            print("ERROR: Download returned no data.")
+            return
 
-      - name: Run Heartbeat
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python heartbeat.py
+        # Calculate Performance
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_vol = df.pct_change().iloc[-1].abs().mean() * 100
+        
+        print(f"Success! Market Uncertainty for {today}: {daily_vol:.2f}%")
+        
+        # Save to Supabase
+        supabase.table("performance_logs").upsert({
+            "date": today, 
+            "error_rate": round(daily_vol, 2)
+        }).execute()
+
+        print("--- SHIFT COMPLETE ---")
+
+    except Exception as e:
+        print(f"FATAL ERROR: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    run_sync()
