@@ -2,45 +2,61 @@ import os
 import sys
 import pandas as pd
 import yfinance as yf
+from datetime import datetime
 from supabase import create_client
 
 def run():
     print("--- 1. ROBOT WAKING UP ---")
     
-    # 1. Fetch Secrets from GitHub
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
     
-    # 2. Strict Check for the URL
-    if not url or "supabase.co" not in str(url):
-        print("!!! ERROR: SUPABASE_URL is missing or wrong in GitHub.")
+    if not url or not key:
+        print("!!! ERROR: Secrets missing.")
         sys.exit(1)
-    
-    # 3. Strict Check for the KEY
-    if not key or len(str(key)) < 10:
-        print("!!! ERROR: SUPABASE_KEY is missing or too short in GitHub.")
-        print(f"DEBUG: Key found was: {type(key)}")
-        sys.exit(1)
-
-    print("--- 2. ADDRESS AND KEY VERIFIED ---")
 
     try:
-        # 4. Connect to Database
-        print("--- 3. ATTEMPTING CLOUD CONNECTION ---")
+        # 1. Connect
         supabase = create_client(url, key)
-        print("--- 4. DATABASE CONNECTED ---")
+        print("--- 2. CLOUD CONNECTION SUCCESSFUL ---")
         
-        # 5. Get Market Data (Testing with BTC)
-        print("--- 5. FETCHING MARKET DATA ---")
-        data = yf.download("BTC-AUD", period="5d", interval="1d", progress=False)
+        # 2. Assets to track
+        tickers = ["BTC-AUD", "ETH-AUD", "NVDA", "SPY", "VAS.AX", "GC=F", "SI=F", "AUDUSD=X", "^TNX"]
+        
+        # 3. Fetch Market Data
+        print("--- 3. FETCHING MARKET DATA ---")
+        data = yf.download(tickers, period="7d", interval="1d", progress=False)['Close'].ffill()
         
         if data.empty:
-            print("!!! ERROR: No market data received.")
+            print("!!! ERROR: No data received.")
             sys.exit(1)
         
-        price = data['Close'].iloc[-1]
-        print(f"--- 6. DATA RECEIVED: BTC is ${price:,.2f} AUD ---")
-        print("--- 7. ROBOT SHIFT SUCCESSFUL ---")
+        # 4. Calculate Logic
+        today = datetime.now().strftime('%Y-%m-%d')
+        # We turn the 'List' into a single 'Average Uncertainty' number
+        daily_vol = float(data.pct_change().iloc[-1].abs().mean() * 100)
+        
+        print(f"--- 4. ANALYSIS COMPLETE: Uncertainty is {daily_vol:.2f}% ---")
+            
+        # 5. SAVE TO SUPABASE (The real goal!)
+        print("--- 5. SAVING TO CLOUD BRAIN ---")
+        supabase.table("performance_logs").upsert({
+            "date": today, 
+            "error_rate": round(daily_vol, 2)
+        }).execute()
+        
+        # 6. Check for Anomalies
+        last_move = data.pct_change().iloc[-1] * 100
+        for ticker, move in last_move.items():
+            if abs(move) > 5.0:
+                print(f"!!! Anomaly in {ticker}: {move:.2f}%")
+                supabase.table("knowledge_ledger").insert({
+                    "asset": ticker,
+                    "event": "Robot Discovery",
+                    "context": f"Detected move of {move:.2f}%"
+                }).execute()
+        
+        print("--- 6. ROBOT SHIFT SUCCESSFUL: DATA SAVED ---")
         
     except Exception as e:
         print(f"!!! CRITICAL CRASH: {str(e)}")
