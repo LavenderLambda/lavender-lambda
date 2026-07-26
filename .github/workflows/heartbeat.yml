@@ -15,13 +15,13 @@ jobs:
       - name: 2. Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: 3. Install Tools
         run: |
           python -m pip install --upgrade pip
-          # We only lock the big tools; let them pick their own sub-parts
-          pip install "numpy<2.0.0" "pandas<2.1.0" "yfinance==0.2.40" "supabase==2.4.0"
+          # We are letting it install the latest, most compatible versions
+          pip install pandas yfinance supabase 
 
       - name: 4. Run Heartbeat
         env:
