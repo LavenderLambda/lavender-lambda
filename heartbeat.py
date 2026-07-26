@@ -1,53 +1,48 @@
-import pandas as pd
-import yfinance as yf
-from datetime import datetime
 import os
 import sys
+import pandas as pd
+import yfinance as yf
 from supabase import create_client
 
-def run_sync():
-    print("--- STABLE ROBOT SHIFT STARTED ---")
+def run():
+    print("--- 1. ROBOT WAKING UP ---")
+    
+    # Check Secrets
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    
+    if not url or url == "" or "supabase.co" not in str(url):
+        print("!!! ERROR: SUPABASE_URL is missing or invalid in GitHub Secrets.")
+        sys.exit(1)
+    print("--- 2. SECRETS VERIFIED ---")
+
     try:
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY")
-        
-        if not url or "supabase.co" not in url:
-            print("CRITICAL ERROR: SUPABASE_URL looks invalid.")
-            sys.exit(1)
-
+        # Connect to Database
         supabase = create_client(url, key)
-
-        # Assets
-        tickers = ["BTC-AUD", "ETH-AUD", "NVDA", "SPY", "VAS.AX", "GC=F", "SI=F", "AUDUSD=X", "^TNX"]
-
-        # Fetch Data (Using the stable method)
-        print("Downloading market data...")
-        data = yf.download(tickers, period="1mo", interval="1d", progress=False)
+        print("--- 3. DATABASE CONNECTED ---")
         
-        # Pull only the 'Close' prices
-        df = data['Close'].ffill()
+        # Get Market Data
+        print("--- 4. FETCHING MARKET DATA ---")
+        # Just BTC-AUD for this test to keep it simple
+        data = yf.download("BTC-AUD", period="5d", interval="1d", progress=False)
         
-        if df.empty:
-            print("ERROR: Download returned no data.")
-            return
-
-        # Calculate Performance
-        today = datetime.now().strftime('%Y-%m-%d')
-        daily_vol = df.pct_change().iloc[-1].abs().mean() * 100
+        if data.empty:
+            print("!!! ERROR: Yahoo Finance returned NO data. Is the internet down?")
+            sys.exit(1)
         
-        print(f"Success! Market Uncertainty for {today}: {daily_vol:.2f}%")
+        price = data['Close'].iloc[-1]
+        print(f"--- 5. DATA RECEIVED: BTC is ${price:,.2f} AUD ---")
+            
+        # Try a test write
+        print("--- 6. ATTEMPTING DATABASE WRITE ---")
+        # (We are not actually writing yet, just testing the connection flow)
         
-        # Save to Supabase
-        supabase.table("performance_logs").upsert({
-            "date": today, 
-            "error_rate": round(daily_vol, 2)
-        }).execute()
-
-        print("--- SHIFT COMPLETE ---")
-
+        print("--- 7. ROBOT SHIFT SUCCESSFUL ---")
+        
     except Exception as e:
-        print(f"FATAL ERROR: {str(e)}")
+        print(f"!!! CRITICAL CRASH: {str(e)}")
+        # This gives us the 'Secret Message' we need
         sys.exit(1)
 
 if __name__ == "__main__":
-    run_sync()
+    run()
